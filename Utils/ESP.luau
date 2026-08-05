@@ -1,7 +1,7 @@
 local RunService = game:GetService("RunService")
-local Players = game:GetService("Players")
 
 local heartbeat_connection
+local descendant_removing_connection
 
 local module = {
     interval = 1 / 60
@@ -11,14 +11,26 @@ local Group = {}
 Group.__index = Group
 
 local groups = {}
+local instanceToGroups = {}
 
-function module.group(functions, config)
-    if not functions or type(functions) ~= "table" then return end
-    if not (functions.Create and functions.Render and functions.Update) then return end
+local function onDescendantRemoving(descendant)
+    local trackingGroups = instanceToGroups[descendant]
+    if not trackingGroups then return end
+
+    for group in trackingGroups do
+        group:Remove(descendant)
+    end
+end
+
+function module.new(definition)
+    if not definition or type(definition) ~= "table" then return end
+    if not (definition.Create and definition.Render and definition.Update) then return end
 
     local self = setmetatable({
-        config = config or {},
-        functions = functions,
+        config = definition.config or {},
+        create = definition.Create,
+        update = definition.Update,
+        render = definition.Render,
         tracked = {},
     }, Group)
 
@@ -26,42 +38,51 @@ function module.group(functions, config)
     return self
 end
 
-function Group:add(instance)
+function Group:Add(instance)
+    if self.tracked[instance] then return end
+
     local entry = {
         instance = instance,
         drawings = {},
     }
 
-    self.functions.Create(entry)
-    self.functions.Update(entry)
+    self.create(self, entry)
+    self.update(self, entry)
 
     self.tracked[instance] = entry
+
+    instanceToGroups[instance] = instanceToGroups[instance] or {}
+    instanceToGroups[instance][self] = true
 
     return entry
 end
 
-function Group:remove(instance)
+function Group:Remove(instance)
     local entry = self.tracked[instance]
-
-    if not entry then
-        return
-    end
+    if not entry then return end
 
     self.tracked[instance] = nil
+
+    if instanceToGroups[instance] then
+        instanceToGroups[instance][self] = nil
+        if not next(instanceToGroups[instance]) then
+            instanceToGroups[instance] = nil
+        end
+    end
 
     for _, drawing in entry.drawings do
         drawing:Remove()
     end
 end
 
-function Group:setSetting(setting, property)
-    if not setting or not property then return end
+function Group:SetSetting(setting, property)
+    if not setting or property == nil then return end
 
     self.config[setting] = property
-    Group:_update()
+    self:_update()
 end
 
-function Group:getSetting(setting)
+function Group:GetSetting(setting)
     if not setting then return end
 
     return self.config and self.config[setting]
@@ -69,22 +90,24 @@ end
 
 function Group:_update()
     for _, entry in self.tracked do
-        self.functions.Update(entry)
+        self.update(self, entry)
     end
 end
 
 function Group:_render()
     for _, entry in self.tracked do
-        self.config.Render(entry)
+        self.render(self, entry)
     end
 end
 
-function Group:destroy()
+function Group:Destroy()
     for instance in self.tracked do
-        self:remove(instance)
+        self:Remove(instance)
     end
 
     table.clear(self.tracked)
+
+    table.remove(table.find(groups, self))
 end
 
 
@@ -103,6 +126,30 @@ function module.init()
             group:_render()
         end
     end)
+
+    descendant_removing_connection = workspace.DescendantRemoving:Connect(onDescendantRemoving)
+end
+
+function module.CreateDrawing(type, properties)
+    local drawing = Drawing.new(type)
+
+    for i,v in properties do
+        drawing[i] = v
+    end
+
+    return drawing
+end
+
+function module.HideDrawings(drawings)
+    for _, drawing in drawings do
+        if isrenderobj(drawing) then
+            drawing.Visible = false
+        else
+            for _, obj in drawing do
+                obj.Visible = false
+            end
+        end
+    end
 end
 
 function module.Destroy()
@@ -111,10 +158,17 @@ function module.Destroy()
         heartbeat_connection = nil
     end
 
+    if descendant_removing_connection then
+        descendant_removing_connection:Disconnect()
+        descendant_removing_connection = nil
+    end
+
     for _, group in groups do
-        group:destroy()
+        group:Destroy()
     end
     table.clear(groups)
+
+    table.clear(instanceToGroups)
 end
 
 return module
