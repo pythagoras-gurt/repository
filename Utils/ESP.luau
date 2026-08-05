@@ -27,7 +27,7 @@ function module.new(definition)
     if not (definition.Create and definition.Render and definition.Update) then return end
 
     local self = setmetatable({
-        config = definition.config or {},
+        config = definition.Config or {},
         create = definition.Create,
         update = definition.Update,
         render = definition.Render,
